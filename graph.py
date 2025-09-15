@@ -204,7 +204,7 @@ def data_acquisition():
             time.sleep(0.01)
         except Exception as e:
             print(f"Error reading data: {e}")
-            break
+            time.sleep(2)
 
 def update_plot():
     """Update the matplotlib plot with latest data and send to Pure Data"""
@@ -227,6 +227,7 @@ def update_plot():
         
         # Apply notch filter to EMG data
         filtered_emg = apply_notch_filter(emg_data, SAMPLING_RATE, NOTCH_FREQ, QUALITY_FACTOR)
+        filtered_emg = apply_notch_filter(filtered_emg, SAMPLING_RATE, 1, 20)
         
         # Update FFT plot (original signal)
         if len(emg_data) > 10:

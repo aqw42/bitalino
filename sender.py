@@ -36,9 +36,6 @@ G_EMG = 1009  # Sensor gain
 N_BITS = 10  # Resolution (10-bit ADC)
 ADC_MAX = 2**N_BITS - 1  # Maximum ADC value (1023 for 10-bit)
 
-# Notch filter parameters
-NOTCH_FREQ = 50.0  # Frequency to remove (Hz)
-QUALITY_FACTOR = 30.0  # Higher Q = narrower notch
 
 def convert_adc_to_mv(adc_values):
     """Convert raw ADC values to millivolts using BITalino EMG transfer function"""
@@ -168,8 +165,14 @@ def data_acquisition():
             print(f"Error reading data: {e}")
             break
 
+# Notch filter parameters
+NOTCH_FREQ = 50.0  # Frequency to remove (Hz)
+QUALITY_FACTOR = 30.0  # Higher Q = narrower notch
+NOTCH_FREQ2 = 0.5  # Frequency to remove (Hz)
+QUALITY_FACTOR2 = 10.0  # Higher Q = narrower notch
+
+
 def update_plot():
-    """Update the matplotlib plot with latest data and send to Pure Data"""
     global osc_send_counter
     
     if len(emg_data_buffer) > 0:
@@ -177,6 +180,9 @@ def update_plot():
     
         # Apply notch filter to EMG data
         filtered_emg = apply_notch_filter(emg_data, SAMPLING_RATE, NOTCH_FREQ, QUALITY_FACTOR)
+        # Apply notch filter to EMG data
+        filtered_emg = apply_notch_filter(filtered_emg, SAMPLING_RATE, NOTCH_FREQ2, QUALITY_FACTOR2)
+
 
         # Update FFT plot (filtered signal) and send to Pure Data
         if len(filtered_emg) > 10:
