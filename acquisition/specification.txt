@@ -1,0 +1,38 @@
+Software Specification for BITalino Acquisition System
+=====================================================
+
+1. Sensor List and Association
+-----------------------------
+- The system supports multiple sensors connected to a BITalino device.
+- Each sensor is associated with a unique analog input port.
+- Each sensor has a type: EMG, EEG, or ECG.
+- The sensor type determines the transfer function used for signal processing.
+
+2. Graphs per Sensor
+--------------------
+For each sensor, the following graphs are generated:
+  a. Raw Voltage Data (time domain)
+  b. Raw FFT (frequency domain)
+  c. Filtered FFT (frequency domain)
+     - Filtering: Low-pass filter at 5 Hz and a narrow notch filter at 50 Hz
+
+3. OpenSoundControlEndpoints
+---------------------------
+- Each sensor has a distinct set of OpenSoundControl (OSC) endpoints.
+- Endpoints are prefixed with "/<type><index>/" (e.g., /EMG1/, /EEG2/).
+
+4. Configuration File (config.txt)
+----------------------------------
+A separate configuration file will specify:
+  - BITalino MAC address
+  - Data buffer size
+  - Sampling rate
+  - OSC refresh rate
+  - OSC IP address
+  - OSC port
+  - List of sensor ports and their types (e.g., A1: EMG, A2: EEG)
+
+5. Notes
+--------
+- The configuration file must be updated by the user to match their hardware setup.
+- The software will use the configuration to initialize acquisition, processing, and OSC endpoint setup.
