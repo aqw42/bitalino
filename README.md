@@ -1,5 +1,5 @@
 <img width="675" height="828" alt="Screenshot_20250915_233017" src="https://github.com/user-attachments/assets/255c6190-a592-4145-881c-b6da4f71e47d" />
-![serial-experiments-lain-750-164743634](https://github.com/user-attachments/assets/34705eff-4419-45e5-8bd8-fd4ab7ba0621)
+<img width="1400" height="914" alt="Screenshot_20250915_224459" src="https://github.com/user-attachments/assets/34705eff-4419-45e5-8bd8-fd4ab7ba0621" />
 <img width="1400" height="914" alt="Screenshot_20250915_224459" src="https://github.com/user-attachments/assets/540ecb58-f0bf-4364-ad6c-f0dc6a7d90d5" />
 <img width="936" height="538" alt="Screenshot_20250915_223234" src="https://github.com/user-attachments/assets/f275d4e0-11ad-441b-81ca-59dda74a3ae1" />
 <img width="481" height="361" alt="Screenshot_20250915_223201" src="https://github.com/user-attachments/assets/7b8a4e35-0541-4e53-8f3d-c7a51aac789f" />
