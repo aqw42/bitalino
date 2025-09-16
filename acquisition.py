@@ -26,7 +26,7 @@ SENSORS = [
     (1, "EMG"),
     (2, "ECG"),
     (3, "EEG"),
-    (3, "EMG")
+    (4, "EMG") 
 ]
 
 # Given by sensors datasheets
@@ -46,15 +46,16 @@ NOTCHES = [
 
 # Global thread communication
 sensor_thread_status = {"running": True, "error": None, "disconnected": False}
-data_buffers = {id: deque(maxlen=BUFFER_SIZE) for id, sensor_type in SENSORS}
-ffts = {id: deque(maxlen=BUFFER_SIZE) for id, sensor_type in SENSORS}
+# Use port number as the key since that's the unique identifier
+data_buffers = {port: deque(maxlen=BUFFER_SIZE) for port, sensor_type in SENSORS}
+ffts = {port: (np.array([]), np.array([])) for port, sensor_type in SENSORS}
 
 ##### SENSORS ACQUISITION
 
 def transfer_function(adc_values, sensor_type):
     ADC_BITS = 10
     VCC = 3.3
-    GAIN = GAINS[sensor_type]  # Fixed: was GAIN instead of GAINS
+    GAIN = GAINS[sensor_type]
     
     measured_v = ((adc_values / (2**ADC_BITS)) - 0.5) * VCC / GAIN
 
@@ -73,7 +74,8 @@ def sensor_acquisition_loop(device):
     sensor_thread_status["error"] = None
     sensor_thread_status["disconnected"] = False
     
-    device.start(SAMPLING_RATE, [port + 1 for port, type in SENSORS])
+    # Start device with correct port numbers (1-indexed for BITalino API)
+    device.start(SAMPLING_RATE, [port for port, sensor_type in SENSORS])
     
     print("[SENSOR] Starting acquisition loop", flush=True)
 
@@ -83,17 +85,15 @@ def sensor_acquisition_loop(device):
             new_samples = device.read(READ_CHUNK_SIZE)
             
             # Process each sensor
-            for i, (port, sensor_type) in enumerate(SENSORS):
-                # Column index is port + 4 (first 4 columns are sequence, digital channels, etc.)
-                channel_data = new_samples[:, port + 3]
+            for port, sensor_type in SENSORS:
+                # Column index is port + 4 (first 5 columns are sequence, digital I/O, then analog channels)
+                channel_data = new_samples[:, port + 4]
                 
                 # Convert to physical units
                 physical_data = transfer_function(channel_data, sensor_type)
                 
-                # Store in buffer
+                # Store in buffer using port as key
                 data_buffers[port].extend(physical_data)
-                print(i)
-                print(physical_data)
             
             # Reset missed count on successful read
             missed_count = 0
@@ -134,48 +134,58 @@ def sensor_acquisition_loop(device):
 ##### OSC UPDATES
 
 def osc_refresh_loop():
-    client = udp_client.SimpleUDPClient(OSC_IP, OSC_PORT)
-    print("[OSC] Starting OSC transmission loop", flush=True)
+    try:
+        client = udp_client.SimpleUDPClient(OSC_IP, OSC_PORT)
+        print("[OSC] Starting OSC transmission loop", flush=True)
+        
+        while sensor_thread_status["running"]:
+            start_time = time.time()
+            
+            # Send latest data for each sensor
+            for (port, sensor_type) in SENSORS:
+                if len(data_buffers[port]) > 0:
+                    try:
+                        client.send_message(f"/{sensor_type}{port}/latest", data_buffers[port][-1])
+                        print(f"[OSC] /{sensor_type}{port}/latest : {data_buffers[port][-1]}", flush=True)
+                    except Exception as e:
+                        print(f"[OSC] Error sending port {port} ({sensor_type}): {e}", flush=True)
+            
+            elapsed = time.time() - start_time
+            sleep_time = max(0, (1 / OSC_REFRESH_RATE) - elapsed)
+            time.sleep(sleep_time)
     
-    while sensor_thread_status["running"]:
-        start_time = time.time()
-        
-        # Send latest data for each sensor
-        for (sensor_id, sensor_type) in SENSORS:
-            if len(data_buffers[sensor_id]) > 0:
-                latest_value = data_buffers[sensor_id][-1]
-                try:
-                    client.send_message(f"/{sensor_type}{sensor_id}", latest_value)
-                except Exception as e:
-                    print(f"[OSC] Error sending {sensor_id}: {e}", flush=True)
-        
-        elapsed = time.time() - start_time
-        sleep_time = max(0, (1 / OSC_REFRESH_RATE) - elapsed)
-        time.sleep(sleep_time)
+    except Exception as e:
+        print(f"[OSC] OSC loop error: {e}", flush=True)
     
     print("[OSC] OSC transmission loop ended", flush=True)
 
 ##### DATA COMPUTE
 
 def compute_fft(signal):
-        if len(signal) < 2:
-            return np.array([]), np.array([])
-        
-        windowed_signal = signal * np.hanning(len(signal))
-        fft_data = np.fft.fft(windowed_signal)
-        
-        n_samples = len(signal)
-        freqs = np.fft.fftfreq(n_samples, 1/SAMPLING_RATE)[:n_samples//2]
-        magnitudes = np.abs(fft_data[:n_samples//2])
-        
-        return freqs, magnitudes
+    if len(signal) < 2:
+        return np.array([]), np.array([])
+    
+    # Use last 1024 samples or all available data
+    data_to_process = signal[-1024:] if len(signal) >= 1024 else signal
+    windowed_signal = data_to_process * np.hanning(len(data_to_process))
+    fft_data = np.fft.fft(windowed_signal)
+    
+    n_samples = len(data_to_process)
+    freqs = np.fft.fftfreq(n_samples, 1/SAMPLING_RATE)[:n_samples//2]
+    magnitudes = np.abs(fft_data[:n_samples//2])
+    
+    # Normalize magnitudes
+    if np.max(magnitudes) > 0:
+        magnitudes = magnitudes / np.max(magnitudes)
+    
+    return freqs, magnitudes
 
-def apply_notch_filter(self, signal, notch_freq, quality_factor):
+def apply_notch_filter(signal, notch_freq, quality_factor):
     """Apply a notch filter to remove specific frequency component"""
     if len(signal) < 6:
         return signal
     
-    b_notch, a_notch = iirnotch(notch_freq, quality_factor, self.sampling_rate)
+    b_notch, a_notch = iirnotch(notch_freq, quality_factor, SAMPLING_RATE)
     
     try:
         filtered_signal = filtfilt(b_notch, a_notch, signal)
@@ -184,19 +194,122 @@ def apply_notch_filter(self, signal, notch_freq, quality_factor):
         return signal
     
 def data_processing_loop():
-    while True:
+    global ffts
+    print("[DATA] Starting data processing loop", flush=True)
+    
+    while sensor_thread_status["running"]:
         start_time = time.time()
         
-        for (sensor_id, sensor_type) in SENSORS:
-            signal = data_buffers[sensor_id]
-            for (freq, q_factor) in NOTCHES:
-                signal = self.apply_notch_filter(signal, freq, q_factor)
-            ffts[sensor_id] = compute_fft(signal)
+        for (port, sensor_type) in SENSORS:
+            if len(data_buffers[port]) > 64:  # Need minimum data for processing
+                signal = np.array(data_buffers[port])
+                
+                # Apply notch filters
+                for (freq, q_factor) in NOTCHES:
+                    signal = apply_notch_filter(signal, freq, q_factor)
+                
+                # Compute FFT
+                freqs, magnitudes = compute_fft(signal)
+                ffts[port] = (freqs, magnitudes)
         
         elapsed = time.time() - start_time
-        sleep_time = max(0, (1 / SAMPLING_RATE) - elapsed)
+        sleep_time = max(0, (1 / 50) - elapsed)  # 50Hz processing rate
         time.sleep(sleep_time)
+    
+    print("[DATA] Data processing loop ended", flush=True)
 
+###### GRAPHS
+
+def graphs_refresh_loop():
+    plt.ion()
+    fig, graphs = plt.subplots(2, len(SENSORS), figsize=(15, 10))
+    
+    # Handle single column case
+    if len(SENSORS) == 1:
+        graphs = graphs.reshape(2, 1)
+    
+    lines = {}
+    
+    for i, (port, sensor_type) in enumerate(SENSORS):
+        ax1 = graphs[0, i]  # Time domain plot (top row)
+        ax2 = graphs[1, i]  # Frequency domain plot (bottom row)
+        
+        # Time domain plot
+        line1, = ax1.plot([], [], 'r-', label=f'Port{port} {sensor_type} Signal')
+        ax1.set_xlim(0, 1000)  # Show last 1000 samples
+        
+        # Set appropriate y-limits based on sensor type
+        if sensor_type == "EMG":
+            ax1.set_ylim(-2, 2)
+            ax1.set_ylabel('Signal (mV)')
+        elif sensor_type == "ECG":
+            ax1.set_ylim(-2, 2)
+            ax1.set_ylabel('Signal (mV)')
+        elif sensor_type == "EEG":
+            ax1.set_ylim(-50, 50)  # μV
+            ax1.set_ylabel('Signal (μV)')
+        else:
+            ax1.set_ylim(-3, 3)
+            ax1.set_ylabel('Signal (mV)')
+            
+        ax1.set_xlabel('Sample Index')
+        ax1.set_title(f'Port{port} {sensor_type} Time Domain')
+        ax1.grid(True)
+        ax1.legend()
+        
+        # FFT plot
+        line2, = ax2.plot([], [], 'b-', label=f'Port{port} {sensor_type} FFT')
+        ax2.set_xlim(0, SAMPLING_RATE // 2)
+        ax2.set_ylim(0, 1)
+        ax2.set_xlabel('Frequency (Hz)')
+        ax2.set_ylabel('Normalized Magnitude')
+        ax2.set_title(f'Port{port} {sensor_type} Frequency Domain')
+        ax2.grid(True)
+        ax2.legend()
+        
+        # Store line references for updating using port as key
+        lines[port] = (line1, line2, ax1, ax2)
+    
+    plt.tight_layout()
+    
+    print("[GRAPHS] Starting real-time plotting", flush=True)
+    
+    while sensor_thread_status["running"]:
+        start_time = time.time()
+        
+        for port in data_buffers:
+            if port in lines and len(data_buffers[port]) > 0:
+                line1, line2, ax1, ax2 = lines[port]
+                
+                # Get data from buffer (last 1000 samples for display)
+                data = list(data_buffers[port])[-1000:]
+                
+                if len(data) > 1:
+                    # Update time domain plot
+                    x_data = range(len(data))
+                    line1.set_data(x_data, data)
+                    ax1.set_xlim(0, len(data))
+                    
+                    # Update frequency domain plot (FFT)
+                    if port in ffts:
+                        freqs, magnitude = ffts[port]
+                        if len(freqs) > 0 and len(magnitude) > 0:
+                            line2.set_data(freqs, magnitude)
+                            ax2.set_ylim(0, max(1, np.max(magnitude) * 1.1))
+        
+        # Redraw the plots
+        try:
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+        except Exception as e:
+            print(f"[GRAPHS] Error updating plots: {e}", flush=True)
+        
+        elapsed = time.time() - start_time
+        sleep_time = max(0, (1 / 30) - elapsed)  # ~30 FPS for smooth animation
+        time.sleep(sleep_time)
+    
+    print("[GRAPHS] Plotting loop ended", flush=True)
+    plt.close(fig)
 
 ###### CONNECTIVITY
 
@@ -205,7 +318,7 @@ def init_bt():
     while True:
         try:
             print("[INIT_BT] Connecting...", flush=True)
-            device = BITalino(MAC, timeout=1)
+            device = BITalino(MAC, timeout=10)
             print("[INIT_BT] Connected to BITalino", flush=True)
             return device
     
@@ -219,6 +332,19 @@ def init_bt():
             print("[INIT_BT] Couldn't connect to the device.", flush=True)
             return None
 
+def start_threads(device):
+    sensor_thread = threading.Thread(target=sensor_acquisition_loop, args=(device,))
+    sensor_thread.start()
+    
+    osc_thread = threading.Thread(target=osc_refresh_loop)
+    osc_thread.start()
+    
+    data_thread = threading.Thread(target=data_processing_loop)
+    data_thread.start()
+    
+    return sensor_thread
+    #graphs_thread = threading.Thread(target=graphs_refresh_loop)
+    #graphs_thread.start()
 
 def main():
     global sensor_thread_status
@@ -234,15 +360,8 @@ def main():
     print(f"[MAIN] OSC Target: {OSC_IP}:{OSC_PORT}", flush=True)
     
     try:
-        sensor_thread = threading.Thread(target=sensor_acquisition_loop, args=(device,))
-        sensor_thread.start()
-
-        osc_thread = threading.Thread(target=osc_refresh_loop)
-        osc_thread.start()
+        sensor_thread = start_threads(device)
         
-        data_thread = threading.Thread(target=data_processing_loop)
-        data_thread.start()
-     
         while True:
             # Check if sensor thread is still running
             if not sensor_thread.is_alive() or sensor_thread_status["disconnected"]:
@@ -250,6 +369,7 @@ def main():
                 
                 # Stop the device if it's still connected
                 try:
+                    device.stop()
                     device.close()
                 except:
                     pass
@@ -262,9 +382,7 @@ def main():
                 else:
                     print("[MAIN] Successfully reconnected, resuming data acquisition", flush=True)
                 
-                # Restart sensor thread
-                sensor_thread = threading.Thread(target=sensor_acquisition_loop, args=(device,))
-                sensor_thread.start()
+                sensor_thread = start_threads(device)
             
             time.sleep(1)
             
@@ -274,6 +392,7 @@ def main():
     
     print("[MAIN] Stopping device...", flush=True)
     try:
+        device.stop()
         device.close()
     except Exception as e:
         print(f"[MAIN] Error stopping device: {e}", flush=True)
