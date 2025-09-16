@@ -25,7 +25,8 @@ OSC_REFRESH_RATE = 100
 SENSORS = [
     (1, "EMG"),
     (2, "ECG"),
-    (3, "EEG")
+    (3, "EEG"),
+    (3, "EMG")
 ]
 
 # Given by sensors datasheets
@@ -38,9 +39,17 @@ GAINS = {
     "EEG": 41782 # [-39.49𝜇𝑉, 39.49𝜇𝑉]
 }
 
+NOTCHES = [
+    (50, 30),
+    (1, 30)
+]
+
 # Global thread communication
 sensor_thread_status = {"running": True, "error": None, "disconnected": False}
 data_buffers = {id: deque(maxlen=BUFFER_SIZE) for id, sensor_type in SENSORS}
+ffts = {id: deque(maxlen=BUFFER_SIZE) for id, sensor_type in SENSORS}
+
+##### SENSORS ACQUISITION
 
 def transfer_function(adc_values, sensor_type):
     ADC_BITS = 10
@@ -54,25 +63,6 @@ def transfer_function(adc_values, sensor_type):
         return measured_v * 1000000
     else:
         return measured_v * 1000
-
-def init_bt():
-    missed_count = 0
-    while True:
-        try:
-            print("[INIT_BT] Connecting...", flush=True)
-            device = BITalino(MAC, timeout=1)
-            print("[INIT_BT] Connected to BITalino", flush=True)
-            return device
-    
-        except Exception as e:
-            print(f"[INIT_BT] Error connecting to BITalino: {e}", flush=True)
-            print("[INIT_BT] Trying again in 5 seconds", flush=True)
-            missed_count += 1
-            time.sleep(5)
-        
-        if (missed_count > 10):
-            print("[INIT_BT] Couldn't connect to the device.", flush=True)
-            return None
 
 def sensor_acquisition_loop(device):
     global sensor_thread_status
@@ -141,6 +131,8 @@ def sensor_acquisition_loop(device):
     print("[SENSOR] Acquisition loop ended", flush=True)
     sensor_thread_status["running"] = False
 
+##### OSC UPDATES
+
 def osc_refresh_loop():
     client = udp_client.SimpleUDPClient(OSC_IP, OSC_PORT)
     print("[OSC] Starting OSC transmission loop", flush=True)
@@ -149,11 +141,11 @@ def osc_refresh_loop():
         start_time = time.time()
         
         # Send latest data for each sensor
-        for sensor_id in data_buffers:
+        for (sensor_id, sensor_type) in SENSORS:
             if len(data_buffers[sensor_id]) > 0:
                 latest_value = data_buffers[sensor_id][-1]
                 try:
-                    client.send_message(f"/{sensor_id}", latest_value)
+                    client.send_message(f"/{sensor_type}{sensor_id}", latest_value)
                 except Exception as e:
                     print(f"[OSC] Error sending {sensor_id}: {e}", flush=True)
         
@@ -162,6 +154,71 @@ def osc_refresh_loop():
         time.sleep(sleep_time)
     
     print("[OSC] OSC transmission loop ended", flush=True)
+
+##### DATA COMPUTE
+
+def compute_fft(signal):
+        if len(signal) < 2:
+            return np.array([]), np.array([])
+        
+        windowed_signal = signal * np.hanning(len(signal))
+        fft_data = np.fft.fft(windowed_signal)
+        
+        n_samples = len(signal)
+        freqs = np.fft.fftfreq(n_samples, 1/SAMPLING_RATE)[:n_samples//2]
+        magnitudes = np.abs(fft_data[:n_samples//2])
+        
+        return freqs, magnitudes
+
+def apply_notch_filter(self, signal, notch_freq, quality_factor):
+    """Apply a notch filter to remove specific frequency component"""
+    if len(signal) < 6:
+        return signal
+    
+    b_notch, a_notch = iirnotch(notch_freq, quality_factor, self.sampling_rate)
+    
+    try:
+        filtered_signal = filtfilt(b_notch, a_notch, signal)
+        return filtered_signal
+    except:
+        return signal
+    
+def data_processing_loop():
+    while True:
+        start_time = time.time()
+        
+        for (sensor_id, sensor_type) in SENSORS:
+            signal = data_buffers[sensor_id]
+            for (freq, q_factor) in NOTCHES:
+                signal = self.apply_notch_filter(signal, freq, q_factor)
+            ffts[sensor_id] = compute_fft(signal)
+        
+        elapsed = time.time() - start_time
+        sleep_time = max(0, (1 / SAMPLING_RATE) - elapsed)
+        time.sleep(sleep_time)
+
+
+###### CONNECTIVITY
+
+def init_bt():
+    missed_count = 0
+    while True:
+        try:
+            print("[INIT_BT] Connecting...", flush=True)
+            device = BITalino(MAC, timeout=1)
+            print("[INIT_BT] Connected to BITalino", flush=True)
+            return device
+    
+        except Exception as e:
+            print(f"[INIT_BT] Error connecting to BITalino: {e}", flush=True)
+            print("[INIT_BT] Trying again in 5 seconds", flush=True)
+            missed_count += 1
+            time.sleep(5)
+        
+        if (missed_count > 10):
+            print("[INIT_BT] Couldn't connect to the device.", flush=True)
+            return None
+
 
 def main():
     global sensor_thread_status
@@ -183,6 +240,9 @@ def main():
         osc_thread = threading.Thread(target=osc_refresh_loop)
         osc_thread.start()
         
+        data_thread = threading.Thread(target=data_processing_loop)
+        data_thread.start()
+     
         while True:
             # Check if sensor thread is still running
             if not sensor_thread.is_alive() or sensor_thread_status["disconnected"]:
