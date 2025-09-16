@@ -109,7 +109,7 @@ class Sender:
 class Graphs:
     """Handles real-time plotting of EMG data"""
     
-    def __init__(self, buffer_size=100, sampling_rate=1000):
+    def __init__(self, buffer_size=1000, sampling_rate=1000):
         self.buffer_size = buffer_size
         self.sampling_rate = sampling_rate
         self.start_time = time.time()
@@ -124,7 +124,7 @@ class Graphs:
         
         # BITalino EMG Transfer Function Parameters
         self.VCC = 3.3
-        self.G_EMG = 1100
+        self.G_EMG = 41782
         self.N_BITS = 10
         self.ADC_MAX = 2**self.N_BITS - 1
         
@@ -170,7 +170,7 @@ class Graphs:
     def convert_adc_to_mv(self, adc_values):
         """Convert raw ADC values to millivolts using BITalino EMG transfer function"""
         emg_volts = ((adc_values / (2**self.N_BITS)) - 0.5) * self.VCC / self.G_EMG
-        emg_mv = emg_volts * 1000
+        emg_mv = emg_volts * 100000
         return emg_mv
     
     def apply_notch_filter(self, signal, notch_freq, quality_factor):
@@ -287,9 +287,10 @@ def main():
     macAddress = "88:6B:0F:D9:19:B0"
     BUFFER_SIZE = 1000
     SAMPLING_RATE = 1000
-    READ_CHUNK_SIZE = 100
+    READ_CHUNK_SIZE = 10
     OSC_IP = "127.0.0.1"
     OSC_PORT = 8000
+    CHANNEL = 3
     
     # Initialize classes
     sender = Sender(OSC_IP, OSC_PORT)
@@ -299,7 +300,7 @@ def main():
     try:
         device = BITalino(macAddress)
         print("Connected to BITalino")
-        device.start(SAMPLING_RATE, [1])
+        device.start(SAMPLING_RATE, [CHANNEL - 1])
         print("Device started")
     except Exception as e:
         print(f"Error connecting to BITalino: {e}")
@@ -317,7 +318,7 @@ def main():
         nonlocal running
         while running:
             try:
-                new_samples = device.read(10)
+                new_samples = device.read(READ_CHUNK_SIZE)
                 channel_data = new_samples[:, 5]
                 graphs.add_data(channel_data)
                 time.sleep(0.01)
