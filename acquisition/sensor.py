@@ -1,6 +1,9 @@
 class Sensor:
     def __init__(self, sensor_type, port, index):
-        pass
+        self.type = sensor_type.upper()
+        self.port = port
+        self.index = index
+
     def apply_transfer_function(self, raw_data):
         """
         Applies the appropriate transfer function to the raw_data based on the sensor type.
@@ -15,6 +18,10 @@ class Sensor:
         Returns:
             list or numpy.ndarray: The processed data after applying the transfer function.
         """
-        # Placeholder implementation to avoid unused variable warning
-        _ = raw_data
-        pass
+        # Default: EMG transfer function, can be extended for EEG/ECG
+        VCC = 3.3
+        GAIN = 1009 if self.type == 'EMG' else 1  # Placeholder for other types
+        N_BITS = 10
+        emg_volts = ((raw_data / (2**N_BITS)) - 0.5) * VCC / GAIN
+        emg_mv = emg_volts * 1000
+        return emg_mv
